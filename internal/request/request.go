@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github/omar-shahieen/http-server/internal/headers"
 	"io"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -18,12 +19,14 @@ type parserState int
 const (
 	stateInitialized parserState = iota
 	stateParsingHeaders
+	stateParsingBody
 	stateDone
 )
 
 type Request struct {
 	RequestLine RequestLine
 	Headers     headers.Headers
+	Body        []byte
 	state       parserState
 }
 
@@ -39,6 +42,7 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 	req := &Request{
 		state:   stateInitialized,
 		Headers: headers.NewHeaders(),
+		Body:    make([]byte, 0),
 	}
 
 	for req.state != stateDone {
@@ -102,8 +106,7 @@ func (r *Request) parse(data []byte) (int, error) {
 	return totalBytesParsed, nil
 }
 
-// parseSingle handles a single state transition / single parse operation:
-// one request line, or one header field-line.
+// parseSingle handles a single state transition / single parse operation.
 func (r *Request) parseSingle(data []byte) (int, error) {
 	switch r.state {
 	case stateInitialized:
@@ -127,9 +130,34 @@ func (r *Request) parseSingle(data []byte) (int, error) {
 			return 0, nil
 		}
 		if done {
-			r.state = stateDone
+			r.state = stateParsingBody
 		}
 		return bytesConsumed, nil
+
+	case stateParsingBody:
+		contentLengthStr := r.Headers.Get("Content-Length")
+		if contentLengthStr == "" {
+			// No Content-Length header: assume no body, we're done.
+			r.state = stateDone
+			return 0, nil
+		}
+
+		contentLength, err := strconv.Atoi(contentLengthStr)
+		if err != nil {
+			return 0, fmt.Errorf("invalid Content-Length header: %q", contentLengthStr)
+		}
+
+		r.Body = append(r.Body, data...)
+
+		if len(r.Body) > contentLength {
+			return 0, fmt.Errorf("body length %d exceeds reported Content-Length %d", len(r.Body), contentLength)
+		}
+
+		if len(r.Body) == contentLength {
+			r.state = stateDone
+		}
+
+		return len(data), nil
 
 	case stateDone:
 		return 0, errors.New("error: trying to read data in a done state")

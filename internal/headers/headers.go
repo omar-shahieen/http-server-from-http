@@ -42,6 +42,12 @@ func isValidFieldName(name []byte) bool {
 	return true
 }
 
+// Get returns the value for key, treating the header name as
+// case-insensitive. Returns "" if the header isn't present.
+func (h Headers) Get(key string) string {
+	return h[strings.ToLower(key)]
+}
+
 func (h Headers) Parse(data []byte) (n int, done bool, err error) {
 	crlfIdx := bytes.Index(data, []byte("\r\n"))
 	if crlfIdx == -1 {
