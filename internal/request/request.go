@@ -4,22 +4,26 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github/omar-shahieen/http-server/internal/headers"
 	"io"
 	"strings"
 	"unicode"
 )
 
 const bufferSize = 8
-const crlf ="\r\n"
+const crlf = "\r\n"
+
 type parserState int
 
 const (
 	stateInitialized parserState = iota
+	stateParsingHeaders
 	stateDone
 )
 
 type Request struct {
 	RequestLine RequestLine
+	Headers     headers.Headers
 	state       parserState
 }
 
@@ -32,7 +36,10 @@ type RequestLine struct {
 func RequestFromReader(reader io.Reader) (*Request, error) {
 	buf := make([]byte, bufferSize)
 	readToIndex := 0
-	req := &Request{state: stateInitialized}
+	req := &Request{
+		state:   stateInitialized,
+		Headers: headers.NewHeaders(),
+	}
 
 	for req.state != stateDone {
 		// If buffer is full, double its capacity
@@ -67,13 +74,37 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 	}
 
 	if req.state != stateDone {
-		return nil, fmt.Errorf("incomplete request: reader closed before request line was fully parsed")
+		return nil, fmt.Errorf("incomplete request: reader closed before request was fully parsed")
 	}
 
 	return req, nil
 }
 
+// parse repeatedly calls parseSingle against data until either the state
+// machine reaches stateDone, or a single pass can't make any more progress
+// (meaning we need more data from the reader before we can continue).
 func (r *Request) parse(data []byte) (int, error) {
+	totalBytesParsed := 0
+
+	for r.state != stateDone {
+		n, err := r.parseSingle(data[totalBytesParsed:])
+		if err != nil {
+			return 0, err
+		}
+		if n == 0 {
+			// Not enough data to make further progress this pass;
+			// wait for more bytes from the reader.
+			break
+		}
+		totalBytesParsed += n
+	}
+
+	return totalBytesParsed, nil
+}
+
+// parseSingle handles a single state transition / single parse operation:
+// one request line, or one header field-line.
+func (r *Request) parseSingle(data []byte) (int, error) {
 	switch r.state {
 	case stateInitialized:
 		bytesConsumed, reqLine, err := parseRequestLine(data)
@@ -84,8 +115,22 @@ func (r *Request) parse(data []byte) (int, error) {
 			return 0, nil
 		}
 		r.RequestLine = reqLine
-		r.state = stateDone
+		r.state = stateParsingHeaders
 		return bytesConsumed, nil
+
+	case stateParsingHeaders:
+		bytesConsumed, done, err := r.Headers.Parse(data)
+		if err != nil {
+			return 0, err
+		}
+		if bytesConsumed == 0 {
+			return 0, nil
+		}
+		if done {
+			r.state = stateDone
+		}
+		return bytesConsumed, nil
+
 	case stateDone:
 		return 0, errors.New("error: trying to read data in a done state")
 	default:
