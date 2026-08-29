@@ -48,6 +48,12 @@ func (h Headers) Get(key string) string {
 	return h[strings.ToLower(key)]
 }
 
+// Set assigns value to key, overwriting any existing value for that key
+// (unlike the comma-appending behavior used when parsing duplicate
+// headers off the wire). Case-insensitive, like Get.
+func (h Headers) Set(key, value string) {
+	h[strings.ToLower(key)] = value
+}
 func (h Headers) Parse(data []byte) (n int, done bool, err error) {
 	crlfIdx := bytes.Index(data, []byte("\r\n"))
 	if crlfIdx == -1 {
